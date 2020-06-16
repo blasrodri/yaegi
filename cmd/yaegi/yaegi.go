@@ -114,12 +114,12 @@ func main() {
 	i.Use(interp.Symbols)
 
 	if cmd != `` {
-		i.REPL(strings.NewReader(cmd), os.Stderr)
+		i.REPLLiner(strings.NewReader(cmd), os.Stderr)
 	}
 
 	if len(args) == 0 {
 		if interactive || cmd == `` {
-			i.REPL(os.Stdin, os.Stdout)
+			i.REPLLiner(os.Stdin, os.Stdout)
 		}
 		return
 	}
@@ -136,7 +136,7 @@ func main() {
 	if s := string(b); strings.HasPrefix(s, "#!") {
 		// Allow executable go scripts, Have the same behavior as in interactive mode.
 		s = strings.Replace(s, "#!", "//", 1)
-		i.REPL(strings.NewReader(s), os.Stdout)
+		i.REPLLiner(strings.NewReader(s), os.Stdout)
 	} else {
 		// Files not starting with "#!" are supposed to be pure Go, directly Evaled.
 		i.Name = args[0]
@@ -150,6 +150,6 @@ func main() {
 	}
 
 	if interactive {
-		i.REPL(os.Stdin, os.Stdout)
+		i.REPLLiner(os.Stdin, os.Stdout)
 	}
 }

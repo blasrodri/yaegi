@@ -8,14 +8,19 @@ import (
 	"go/scanner"
 	"go/token"
 	"io"
+	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/peterh/liner"
 )
 
 // Interpreter node structure for AST and CFG
@@ -138,6 +143,9 @@ type Interpreter struct {
 	srcPkg   imports           // source packages used in interpreter, indexed by path
 	pkgNames map[string]string // package names, indexed by path
 	done     chan struct{}     // for cancellation of channel operations
+
+	history_fn  string
+	history_src []string
 }
 
 const (
@@ -207,15 +215,17 @@ type Options struct {
 // New returns a new interpreter
 func New(options Options) *Interpreter {
 	i := Interpreter{
-		opt:      opt{context: build.Default},
-		frame:    &frame{data: []reflect.Value{}},
-		fset:     token.NewFileSet(),
-		universe: initUniverse(),
-		scopes:   map[string]*scope{},
-		binPkg:   Exports{"": map[string]reflect.Value{"_error": reflect.ValueOf((*_error)(nil))}},
-		srcPkg:   imports{},
-		pkgNames: map[string]string{},
-		rdir:     map[string]bool{},
+		opt:         opt{context: build.Default},
+		frame:       &frame{data: []reflect.Value{}},
+		fset:        token.NewFileSet(),
+		universe:    initUniverse(),
+		scopes:      map[string]*scope{},
+		binPkg:      Exports{"": map[string]reflect.Value{"_error": reflect.ValueOf((*_error)(nil))}},
+		srcPkg:      imports{},
+		pkgNames:    map[string]string{},
+		rdir:        map[string]bool{},
+		history_fn:  filepath.Join(os.TempDir(), ".liner_example_history"),
+		history_src: make([]string, 0),
 	}
 
 	i.opt.context.GOPATH = options.GoPath
@@ -468,6 +478,67 @@ func (interp *Interpreter) Use(values Exports) {
 	for k, v := range values {
 		interp.binPkg[k] = v
 	}
+}
+
+func (interp *Interpreter) processSrc(line *liner.State, in io.Reader, out io.Writer, src string) error {
+	line.AppendHistory(src)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handleSignal(ctx, cancel)
+	v, err := interp.EvalWithContext(ctx, src)
+	if err != nil {
+		return err
+	}
+	signal.Reset()
+	prompt := getPrompt(in, out)
+	prompt(v)
+	return nil
+}
+
+func (interp *Interpreter) REPLLiner(in io.Reader, out io.Writer) {
+	line := liner.NewLiner()
+	defer line.Close()
+	// set prompt
+	var v reflect.Value
+	prompt := getPrompt(in, out)
+	prompt(v)
+	line.SetCtrlCAborts(true)
+
+	line.SetCompleter(func(line string) (c []string) {
+		for _, n := range interp.history_src {
+			if strings.HasPrefix(n, strings.ToLower(line)) {
+				c = append(c, n)
+			}
+		}
+		return
+	})
+
+	if f, err := os.Open(interp.history_fn); err == nil {
+		line.ReadHistory(f)
+		f.Close()
+	}
+
+	for {
+		if src, sourceErr := line.Prompt(""); sourceErr == nil {
+			interp.processSrc(line, in, out, src)
+
+		} else if sourceErr == liner.ErrPromptAborted {
+			log.Print("Aborted")
+			break
+		} else {
+			log.Print("Error reading line: ", sourceErr)
+			break
+		}
+
+		if f, err := os.Create(interp.history_fn); err != nil {
+			log.Print("Error writing history file: ", err)
+			break
+		} else {
+			line.WriteHistory(f)
+			f.Close()
+		}
+	}
+
 }
 
 // REPL performs a Read-Eval-Print-Loop on input reader.
